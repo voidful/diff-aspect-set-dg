@@ -1,4 +1,3 @@
-# Import necessary libraries
 import json
 import statistics
 from collections import defaultdict
@@ -12,11 +11,8 @@ nlgeval = NLGEval(no_skipthoughts=True, no_glove=True, metrics_to_omit=["METEOR"
 
 # Create defaultdicts for storing data and output
 data_dict = defaultdict(lambda: defaultdict(dict))
-output_dict = defaultdict(list)
-
 # Define a list of answer choices
 ans_list = ["a", "b", "c", "d"]
-
 # Read the 'race_test_gold.jsonl' file and store the data in data_dict
 with open('./baseline/race_test_gold.jsonl', 'r', encoding='utf8') as jsonlfile:
     for jlines in jsonlfile.readlines():
@@ -30,11 +26,11 @@ with open('./baseline/race_test_gold.jsonl', 'r', encoding='utf8') as jsonlfile:
             data_dict[dict_id]['human'] = {
                 'article': jfile['article'],
                 'questions': jfile['questions'][0],
-                'answers': answer,
+                'answer': answer,
                 'options': jfile['options'][0]
             }
 
-# Read the 'prev_sota.jsonl' file and store the data in data_dict
+# Read emnlp2020 predictions
 with open('./baseline/prev_sota.jsonl', 'r', encoding='utf8') as jsonlfile:
     for jlines in jsonlfile.readlines():
         jfile = json.loads(jlines)
@@ -44,90 +40,80 @@ with open('./baseline/prev_sota.jsonl', 'r', encoding='utf8') as jsonlfile:
             ans_index = ans_list.index(jfile['answers'][0])
             answer = jfile['options'][0][ans_index]
             jfile['options'][0].pop(ans_index)
-            data_dict[dict_id]['prev-sota'] = {
+            data_dict[dict_id]['emnlp2020'] = {
                 'article': jfile['article'],
                 'questions': jfile['questions'][0],
-                'answers': answer,
+                'answer': answer,
                 'options': jfile['options'][0]
             }
 
-# Read the '8.pt_dataset_textcsv_mode_greedy_filtersim_False_predicted.csv' file and store the data in data_dict
+# read dsgv-seq2seq predictions
 pfile = nlp2.read_csv(f"./baseline/8.pt_dataset_textcsv_mode_greedy_filtersim_False_predicted.csv")
 for i in pfile[1:]:
     c, q, a = i[0].split("</s>")
     dict_id = c.strip() + q.strip()
     dict_id = dict_id.replace(" ", "").lower()
-    data_dict[dict_id]["baseline"] = {
+    data_dict[dict_id]["dsgv-seq2seq"] = {
         'article': c,
         'questions': q,
-        'answers': a,
+        'answer': a,
         'options': i[1].split("<s>"),
     }
 
-# Define the evaluation targets
-eval_targets = ['prev-sota', 'baseline']
+score_dict = defaultdict(lambda: defaultdict(list))
+for preds_data_key, preds_dict in data_dict.items():
+    if len(preds_dict.keys()) == 3:
+        for model_key, model_pred_dict in preds_dict.items():
+            truth = preds_dict['human']['options']
+            if model_key != 'human':
+                article = model_pred_dict['article']
+                question = model_pred_dict['questions']
+                model_pred = model_pred_dict['options']
+                answer = model_pred_dict['answer']
 
-# Evaluate the models and calculate metrics
-for eval_target in eval_targets:
-    result_dict = defaultdict(list)
-    for data in data_dict.values():
-        merge_dict = defaultdict(dict)
-        for key, value in data.items():
-            merge_dict['article'] = value['article']
-            merge_dict['questions'] = value['questions']
-            merge_dict['options'][key] = value['options']
-            merge_dict['answer'][key] = value['answers']
+                # Compare model prediction with human prediction
+                predicted = model_pred
+                target_list = [truth] * len(predicted)
+                eval_metric = nlgeval.compute_metrics(ref_list=list(map(list, zip(*target_list))),  # transpose
+                                                      hyp_list=predicted)
+                for k, v in eval_metric.items():
+                    score_dict[model_key][k].append(v)
 
-    # Check if the number of keys in the 'options' dictionary is equal to the number of evaluation targets plus one
-    if len((merge_dict['options'].keys())) == len(eval_targets) + 1:
-        model_pred = merge_dict['options'][eval_target]
-        answer = merge_dict['answer'][eval_target]
-        question = merge_dict['questions']
-        article = merge_dict['article']
-        truth = merge_dict['options']['human']
+                # Compare model prediction with the correct answer
+                predicted = model_pred
+                target_list = [answer] * len(predicted)
+                eval_metric = nlgeval.compute_metrics(ref_list=list(map(list, zip(*target_list))),  # transpose
+                                                      hyp_list=predicted)
+                for k, v in eval_metric.items():
+                    score_dict[model_key][k + '_answer'].append(v)
 
-        # Compare model prediction with human prediction
-        predicted = model_pred
-        target_list = [truth] * len(predicted)
-        eval_metric = nlgeval.compute_metrics(ref_list=list(map(list, zip(*target_list))),  # transpose
-                                              hyp_list=predicted)
-        for k, v in eval_metric.items():
-            result_dict[k].append(v)
+                # Compare model prediction with the article sentences
+                predicted = model_pred
+                target_list = [article] * len(predicted)
+                eval_metric = nlgeval.compute_metrics(ref_list=list(map(list, zip(*target_list))),  # transpose
+                                                      hyp_list=predicted)
+                for k, v in eval_metric.items():
+                    score_dict[model_key][k + '_article'].append(v)
 
-        # Compare model prediction with the correct answer
-        predicted = model_pred
-        target_list = [answer] * len(predicted)
-        eval_metric = nlgeval.compute_metrics(ref_list=list(map(list, zip(*target_list))),  # transpose
-                                              hyp_list=predicted)
-        for k, v in eval_metric.items():
-            result_dict[k + '_answer'].append(v)
+                # Compare model prediction with the question
+                predicted = model_pred
+                target_list = [question] * len(predicted)
+                eval_metric = nlgeval.compute_metrics(ref_list=list(map(list, zip(*target_list))),  # transpose
+                                                      hyp_list=predicted)
+                for k, v in eval_metric.items():
+                    score_dict[model_key][k + '_question'].append(v)
 
-        # Compare model prediction with the article sentences
-        predicted = model_pred
-        target_list = [article] * len(predicted)
-        eval_metric = nlgeval.compute_metrics(ref_list=list(map(list, zip(*target_list))),  # transpose
-                                              hyp_list=predicted)
-        for k, v in eval_metric.items():
-            result_dict[k + '_article'].append(v)
-
-        # Compare model prediction with the question
-        predicted = model_pred
-        target_list = [question] * len(predicted)
-        eval_metric = nlgeval.compute_metrics(ref_list=list(map(list, zip(*target_list))),  # transpose
-                                              hyp_list=predicted)
-        for k, v in eval_metric.items():
-            result_dict[k + '_question'].append(v)
-
-        # Calculate metrics between model predictions
-        internal_dict = defaultdict(list)
-        for combo in combinations(model_pred, 2):
-            eval_metric = nlgeval.compute_metrics(ref_list=[[combo[0]]],  # transpose
-                                                  hyp_list=[combo[1]])
-            for k, v in eval_metric.items():
-                internal_dict[k + '_internal'].append(v)
-        for k, v in internal_dict.items():
-            result_dict[k].append(statistics.mean(v))
+                # Calculate metrics between model predictions
+                internal_dict = defaultdict(list)
+                for combo in combinations(model_pred, 2):
+                    eval_metric = nlgeval.compute_metrics(ref_list=[[combo[0]]],  # transpose
+                                                          hyp_list=[combo[1]])
+                    for k, v in eval_metric.items():
+                        internal_dict[k + '_internal'].append(v)
+                for k, v in internal_dict.items():
+                    score_dict[model_key][k].append(statistics.mean(v))
 
 # Print the evaluation results (mean and length)
-for k, v in result_dict.items():
-    print(eval_target, k, statistics.mean(v), len(v))
+for model_key, scores in score_dict.items():
+    for k, v in scores.items():
+        print(model_key, k, statistics.mean(v), len(v))

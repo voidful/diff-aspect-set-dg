@@ -176,3 +176,4 @@ cython_debug/
 
 survery/surveys
 set-model-result/
+human_eval
